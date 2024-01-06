@@ -9,16 +9,28 @@ from prettytable import PrettyTable
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.fernet import InvalidToken
 
 GREEN, YELLOW, RED, RESET = "\033[92m" + "[+] ", "\033[93m" + "[!] ", "\033[91m" + "[-] ", "\033[0m"
 table = PrettyTable()
 table.align = "l"
 
 def get_masterpw():
-    master_password = getpass.getpass("Enter Master Password: ")
+    check_masterpw = True
+    while check_masterpw:
+        master_password = getpass.getpass("Enter Master Password: ")
+        password_validator, warning, suggestions = validate_password(master_password, None, None)
+        if master_password != "":
+            check_masterpw = False
+        elif password_validator:
+            print("Password is too weak. Please choose a stronger password.")
+            print(RED + "Warning: {}".format(warning) + RESET)
+            print(RED + "Suggestion: {}".format(suggestions) + RESET)
+        else:
+            print(RED + "No password detected, please try again." + RESET)
     return master_password
 
-def guardian_encrypt(master_password, password, salt, mode):
+def get_key(master_password, password, salt, mode):
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
@@ -34,13 +46,14 @@ def guardian_encrypt(master_password, password, salt, mode):
         decrypted_pasword = f.decrypt(password.encode())
         return decrypted_pasword.decode("utf-8")
 
-def validate_password(password, username, domain):
-    results = zxcvbn(password, user_inputs=[username, domain])
+def validate_password(password, username=None, domain=None):
+    if username == None and domain == None:
+        results = zxcvbn(password)
+    else:
+        results = zxcvbn(password, user_inputs=[username, domain])
     if results["score"] >= 3:
-        print("Strong Password")
         return False, None, None
     else:
-        print("Weak Password")
         return True, results["feedback"]["warning"], results["feedback"]["suggestions"][0]
 
 def main_database(options, username=None, domain=None):
@@ -50,7 +63,6 @@ def main_database(options, username=None, domain=None):
         con = sqlite3.connect("database.db")
         cur = con.cursor()
         if database_check == False:
-            # cur.execute("CREATE TABLE password_list(username, domain, password)")
             cur.execute("CREATE TABLE password_list(username, domain, password, salt)")
         if options == "insert":
             insert_database(cur, username, domain)
@@ -61,8 +73,10 @@ def main_database(options, username=None, domain=None):
         con.close()
     except KeyboardInterrupt: 
         print("\n" + RED + "Ctrl + C detected." + RESET)
-    # except Exception as e: 
-    #     print("\n" + RED + "An expected error occured: {}".format(e) + RESET)
+    except InvalidToken:
+        print("\n" + RED + "Invalid Master Password." + RESET)
+    except Exception as e: 
+        print("\n" + RED + "An expected error occured: {}".format(e) + RESET)
 
 def check_database():
     database_exist = "database.db"
@@ -90,7 +104,7 @@ def display_database(cur, username, domain):
     else:
         for name, domain, password, salt in rows:
             master_password = get_masterpw()
-            decrypt_password = guardian_encrypt(master_password, password, salt, "decrypt")
+            decrypt_password = get_key(master_password, password, salt, "decrypt")
             table.field_names = ["Name", "Domain", "Password"]
             table.add_row([name, domain, decrypt_password])
         print(table)
@@ -109,9 +123,6 @@ def insert_database(cur, username, domain):
             password = getpass.getpass("Enter Password: ")
             cfm_password = getpass.getpass("Confirm Password: ")
             password_validator, warning, suggestions = validate_password(password, username, domain)
-            print(password_validator)
-            print(warning)
-            print(suggestions)
             if password != cfm_password:
                 print("Password mismatched. Please try again")
                 password_counter += 1
@@ -122,7 +133,8 @@ def insert_database(cur, username, domain):
             else:
                 salt = secrets.token_hex(32)
                 master_password = get_masterpw()
-                encrypted_pasword = guardian_encrypt(master_password, password, salt, "encrypt")
+                validate_masterpw = validate_password
+                encrypted_pasword = get_key(master_password, password, salt, "encrypt")
                 data = [username, domain, encrypted_pasword, salt]
                 cur.execute("INSERT INTO password_list VALUES(?, ?, ?, ?)", data)
                 break    
